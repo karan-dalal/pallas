@@ -130,7 +130,7 @@ for seq_len in sequences:
         token_pre_C = jnp.sum(token_d.T * W_new, axis=0, keepdims=True)
         pl.store(o_ref, (pl.dslice(i, 1), slice(None)), token_pre_C)
 
-        return W
+        return W_new
 
       W = jax.lax.fori_loop(0, sequence_length, body, W)
 
