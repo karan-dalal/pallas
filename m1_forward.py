@@ -22,6 +22,7 @@ heads = 12
 key = jax.random.PRNGKey(0)
 
 A = jax.random.normal(key, shape=(heads, head_dim, embd_dim))
+A_tranpose = jnp.transpose(A, (0, 2, 1))
 
 B = jax.random.normal(key, shape=(heads, embd_dim, head_dim))
 C = jax.random.normal(key, shape=(heads, head_dim, embd_dim))
@@ -116,11 +117,12 @@ for seq_len in sequences:
         token_pre_A = jnp.sum(token_b.T * W, axis=0, keepdims=True)
 
         def tile_gradient(j, accum):
-          A_col = pl.load(A_ref, (slice(None), pl.dslice(j * BLOCK_SIZE, BLOCK_SIZE)))
+          # A_col = pl.load(A_ref, (slice(None), pl.dslice(j * BLOCK_SIZE, BLOCK_SIZE)))
+          A_tranpose_row = pl.load(A_ref, (pl.dslice(j * BLOCK_SIZE, BLOCK_SIZE), slice(None)))
           token = pl.load(seq_ref, (pl.dslice(i, 1), pl.dslice(j * BLOCK_SIZE, BLOCK_SIZE)))
 
-          loss = jnp.sum(token_pre_A.T * A_col, axis=0, keepdims=True) - token
-          accum += jnp.sum(loss.T * A_col.T, axis=0, keepdims=True)
+          loss = jnp.sum(token_pre_A.T * A_tranpose_row.T, axis=0, keepdims=True) - token
+          accum += jnp.sum(loss.T * A_tranpose_row, axis=0, keepdims=True)
           return accum
 
         accum_grad = jax.lax.fori_loop(0, embd_dim // BLOCK_SIZE, tile_gradient, jnp.zeros((1, head_dim)))
@@ -160,7 +162,7 @@ for seq_len in sequences:
     res_dict['sequence_length'].append(seq_len)
     res_dict['scan'].append(timing(scan_forward, sequence, A, B, C, D, W0) * 1000)
     res_dict['kernel_16'].append(timing(kernel_16_forward, sequence, A, B, C, D, W0) * 1000)
-    res_dict['kernel_hadamard'].append(timing(kernel_hadamard_forward, sequence, A, B, C, D, W0) * 1000)
+    res_dict['kernel_hadamard'].append(timing(kernel_hadamard_forward, sequence, A_tranpose, B, C, D, W0) * 1000)
 
 print(res_dict)
-torch.save(res_dict, 'results/m1_gradient_kernel_forward.pth') 
+torch.save(res_dict, 'results/m1_gradient_kernel_forward_contiguous.pth') 
