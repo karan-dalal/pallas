@@ -16,7 +16,7 @@ def timing(f, *args):
     return timeit(f_time, number=100)
 
 embd_dim = 768
-head_dim = 64 
+head_dim = 64
 heads = 12
 
 key = jax.random.PRNGKey(0)
@@ -34,7 +34,7 @@ res_dict = {
     'kernel_hadamard': []
 }
 
-sequences = [2**i for i in range(10, 12, 1)]
+sequences = [2**i for i in range(5, 12, 1)]
 
 for seq_len in sequences:
     
@@ -47,7 +47,7 @@ for seq_len in sequences:
 
       def inner_forward(token, W):
         token_transformed = token @ B @ W @ A
-        return 0.5 * ((token_transformed - token) ** 2).mean()
+        return 0.5 * ((token_transformed - token) ** 2).sum()
 
       def new_forward(token, W):
         return token @ D @ W @ C
@@ -92,8 +92,8 @@ for seq_len in sequences:
           return accum
 
         accum_grad = jax.lax.fori_loop(0, embd_dim // BLOCK_SIZE, tile_gradient, jnp.zeros((16, head_dim)))
-        gradient = token_b.T @ accum_grad
-        W_new = W - gradient / 16
+        gradient = (token_b.T @ accum_grad) / 16
+        W_new = W - gradient
         token_pre_C = token_d @ W_new
         pl.store(o_ref, (pl.dslice(i, 16), slice(None)), token_pre_C)
 
@@ -123,7 +123,8 @@ for seq_len in sequences:
           return accum
 
         accum_grad = jax.lax.fori_loop(0, embd_dim // BLOCK_SIZE, tile_gradient, jnp.zeros((1, head_dim)))
-        gradient = jnp.outer(token_b.T, accum_grad) 
+        gradient = token_b.T * accum_grad
+
         W_new = W - gradient
         token_pre_C = jnp.sum(token_d.T * W_new, axis=0, keepdims=True)
         pl.store(o_ref, (pl.dslice(i, 1), slice(None)), token_pre_C)
@@ -152,6 +153,7 @@ for seq_len in sequences:
       # Initialize and call kernel
       kernel_forward = jax.vmap(pl.pallas_call(kernel_hadamard, out_shape=jax.ShapeDtypeStruct(kernel_output.shape, kernel_output.dtype)))
       output = kernel_forward(sequence, sequence_B, sequence_D, A, W0)
+
       return output @ C
 
     res_dict['sequence_length'].append(seq_len)
@@ -160,4 +162,4 @@ for seq_len in sequences:
     res_dict['kernel_hadamard'].append(timing(kernel_hadamard_forward, sequence, A, B, C, D, W0) * 1000)
 
 print(res_dict)
-torch.save(res_dict, 'results/m1_forward_unverified_ACOL.pth') 
+torch.save(res_dict, 'results/m1_gradient_kernel_forward.pth') 
