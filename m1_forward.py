@@ -22,6 +22,7 @@ heads = 12
 key = jax.random.PRNGKey(0)
 
 A = jax.random.normal(key, shape=(heads, head_dim, embd_dim))
+
 B = jax.random.normal(key, shape=(heads, embd_dim, head_dim))
 C = jax.random.normal(key, shape=(heads, head_dim, embd_dim))
 D = jax.random.normal(key, shape=(heads,embd_dim, head_dim))
@@ -104,7 +105,7 @@ for seq_len in sequences:
     def kernel_hadamard(seq_ref, seq_b_ref, seq_d_ref, A_ref, W_ref, o_ref):
       sequence_length, embd_dim = seq_ref.shape
       head_dim = W_ref.shape[0]
-      BLOCK_SIZE = 256
+      BLOCK_SIZE = 512 # NOTE: Will not give correct result, not multiple of embedding dimension.
 
       W = W_ref[:]
 
