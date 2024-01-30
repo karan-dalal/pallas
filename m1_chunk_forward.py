@@ -60,7 +60,7 @@ for chunk_size in chunks:
             
             def inner_gradient(W, token):
                 token_transformed = token @ B @ W @ A
-                return 0.5 * ((token_transformed - token) ** 2).mean()
+                return 0.5 * ((token_transformed - token) ** 2).mean() * heads
 
             inner_grad = jax.grad(inner_gradient, argnums=0)
 
@@ -116,7 +116,7 @@ for chunk_size in chunks:
             
             def inner_gradient(W, token):
                 token_transformed = token @ B @ W @ A
-                return 0.5 * ((token_transformed - token) ** 2).mean()
+                return 0.5 * ((token_transformed - token) ** 2).mean() * heads
 
             inner_grad = jax.grad(inner_gradient, argnums=0)
 
@@ -164,7 +164,7 @@ for chunk_size in chunks:
             
             def inner_gradient(W, token):
                 token_transformed = token @ B @ W @ A
-                return 0.5 * ((token_transformed - token) ** 2).mean()
+                return 0.5 * ((token_transformed - token) ** 2).mean() * heads
 
             inner_grad = jax.grad(inner_gradient, argnums=0)
 
@@ -191,7 +191,7 @@ for chunk_size in chunks:
             
             def inner_gradient(W, token):
                 token_transformed = token @ B @ W @ A
-                return 0.5 * ((token_transformed - token) ** 2).mean()
+                return 0.5 * ((token_transformed - token) ** 2).mean() * heads
 
             def inner_forward(W, token):
                 return token @ D @ W @ C
@@ -235,7 +235,7 @@ for chunk_size in chunks:
             
             def inner_gradient(W, token):
                 token_transformed = token @ B @ W @ A
-                return 0.5 * ((token_transformed - token) ** 2).mean()
+                return 0.5 * ((token_transformed - token) ** 2).mean() * heads
 
             def inner_forward(W, token):
                 return token @ D @ W @ C
