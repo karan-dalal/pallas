@@ -46,6 +46,7 @@ for chunk_size in chunks:
         'fused_kernel_16': [],
         'cumsum': [],
         'cumsum_kernel': [],
+        'cumsum_kernel_block': [],
     }
 
     for seq_len in sequences:
@@ -256,15 +257,68 @@ for chunk_size in chunks:
             output = jnp.reshape(output, (seq_len, embd_dim))
             return output
 
+        # NOTE: Cumsum kernel using blocks.
+        def block_cumsum_kernel(W_col_ref, grad_col_ref, o_ref):
+            W_col = W_col_ref[:]
+            chunk_size = grad_col_ref.shape[0]
+
+            def body(i, W_col_curr):
+                gradient_col = pl.load(grad_col_ref, (pl.dslice(i, 1), slice(None), slice(None)))
+                W_col_new = W_col_curr - gradient_col
+
+                pl.store(o_ref, (pl.dslice(i, 1), slice(None), slice(None)), W_col_new)
+                return W_col_new
+
+            W_col_final = jax.lax.fori_loop(0, chunk_size, body, W_col)
+
+        launch_block_cumsum_kernel_block = pl.pallas_call(
+            block_cumsum_kernel,
+            out_shape=jax.ShapeDtypeStruct(cumsum_kernel_output.shape, cumsum_kernel_output.dtype),
+            grid=(1, 1, head_dim),
+            in_specs=[
+                pl.BlockSpec(lambda i, j, k: (0, 0, k), (1, 2, head_dim)),
+                pl.BlockSpec(lambda i, j, k: (0, 0, k), (chunk_size, 2, head_dim))
+            ],
+            out_specs=pl.BlockSpec(lambda i, j, k: (0, 0, k), (chunk_size, 2, head_dim)),
+        )
+
+        @jax.jit
+        @jax.vmap
+        def fused_forward_block(sequence, A, B, C, D, W0):
+            
+            def inner_gradient(W, token):
+                token_transformed = token @ B @ W @ A
+                return 0.5 * ((token_transformed - token) ** 2).mean() * heads
+
+            def inner_forward(W, token):
+                return token @ D @ W @ C
+
+            inner_grad = jax.grad(inner_gradient, argnums=0)
+
+            def body(carry, token_chunk):
+                W = carry
+                
+                grad_chunk = jax.vmap(partial(inner_grad, W))(token_chunk)
+                W_new = launch_block_cumsum_kernel_block(jnp.expand_dims(W, axis=0), grad_chunk)
+                token_transformed = jax.vmap(inner_forward)(W_new, token_chunk)
+
+                return W_new[-1], token_transformed
+
+            sequence = jnp.reshape(sequence, (seq_len // chunk_size, chunk_size, embd_dim))
+            W_final, output = jax.lax.scan(body, W0, sequence)
+            output = jnp.reshape(output, (seq_len, embd_dim))
+            return output
+
         res_dict['sequence_length'].append(seq_len)
         res_dict['fused_scan'].append(timing(scan_forward, sequence, A, B, C, D, W0) * 1000)
         res_dict['fused_kernel_hadamard'].append(timing(fused_forward, sequence, A, B, C, D, W0) * 1000)
         res_dict['fused_kernel_16'].append(timing(fused_forward_16, sequence, A, B, C, D, W0) * 1000)
         res_dict['cumsum'].append(timing(cumsum_forward, sequence, A, B, C, D, W0) * 1000)
         res_dict['cumsum_kernel'].append(timing(cumsum_kernel_forward, sequence, A, B, C, D, W0) * 1000)
+        res_dict['cumsum_kernel_block'].append(timing(fused_forward_block, sequence, A, B, C, D, W0) * 1000)
 
     chunk_dict['chunk_size'].append(chunk_size)
     chunk_dict['results'].append(res_dict)
 
 print(chunk_dict)
-torch.save(chunk_dict, '/nlp/scr/yusun/data/karan/ttt-gpt/pallas/results/m1_fused_kernel_forward.pth') 
+torch.save(chunk_dict, '/nlp/scr/yusun/data/karan/ttt-gpt/pallas/results/m1_fused_kernel_forward_blocks.pth')
