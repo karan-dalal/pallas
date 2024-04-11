@@ -1,5 +1,5 @@
 import jax
-import torch
+# import torch
 import jax.numpy as jnp
 import numpy as np
 import pdb
@@ -44,7 +44,7 @@ def layer_norm(x, scale, bias):
     return scale * (x - mean) / jnp.sqrt(var + 1e-6) + bias
 
 @jax.jit
-def dual(sequence, A, B, C, O, W0):
+def dual(sequence, A, B, C, O, W0, b0, ln_scale, ln_bias):
     sequenceA = sequence @ A
     sequenceB = sequence @ B
     sequenceC = sequence @ C
@@ -86,7 +86,6 @@ def dual(sequence, A, B, C, O, W0):
     output = jnp.reshape(sequenceCW, (heads, seq_len, head_dim)) @ O
     return output
 
-
 def m1_forward(XA_ref, XB_ref, XC_ref, W0_ref, b0_ref, scale_ref, bias_ref, o_ref):
     seq_len, head_dim = XA_ref.shape
     W0, b0 = W0_ref[:], b0_ref[:]
@@ -106,9 +105,9 @@ def m1_forward(XA_ref, XB_ref, XC_ref, W0_ref, b0_ref, scale_ref, bias_ref, o_re
 
         DLN_out, LN_vjp = jax.vjp(lambda z: layer_norm(z, head_scale, head_bias), Z1)
         grad_l_wrt_DLN_out = DLN_out - XA_chunk 
-        grad_l_wrt_Z1 = LN_vjp(grad_l_wrt_DLN_out)[0] # NOTE: Extracting incorrectly?
+        grad_l_wrt_Z1 = LN_vjp(grad_l_wrt_DLN_out)[0]
 
-        Attn1 = jnp.tril(XC_chunk @ XB_chunk.transpose(1, 0)) # NOTE: Tril Error
+        Attn1 = jnp.tril(XC_chunk @ XB_chunk.transpose(1, 0))
         b1_bar = b1_init -  jnp.cumsum(grad_l_wrt_Z1, axis=0)
         Z1_bar = XC_chunk @ W1_init - (Attn1) @ grad_l_wrt_Z1 + b1_bar
         Z1_bar = layer_norm(Z1_bar, head_scale, head_bias)
@@ -117,7 +116,7 @@ def m1_forward(XA_ref, XB_ref, XC_ref, W0_ref, b0_ref, scale_ref, bias_ref, o_re
         pl.store(o_ref, (pl.dslice(i * CHUNK_SIZE, CHUNK_SIZE), slice(None)), XCW_chunk)
 
         W1_last = W1_init - (X1).transpose(1, 0) @ grad_l_wrt_Z1
-        b1_last = b1_bar[-1]
+        b1_last = b1_init -  jnp.sum(grad_l_wrt_Z1, axis=0)
 
         return (W1_last, b1_last)
     
@@ -126,22 +125,17 @@ def m1_forward(XA_ref, XB_ref, XC_ref, W0_ref, b0_ref, scale_ref, bias_ref, o_re
 launch_kernel = pl.pallas_call(m1_forward, out_shape=jax.ShapeDtypeStruct(kernel_output.shape, kernel_output.dtype))
 
 @jax.jit
-def kernel(sequence, A, B, C, O, W0):
+def kernel(sequence, A, B, C, O, W0, b0, ln_scale, ln_bias):
     sequenceA = sequence @ A
     sequenceB = sequence @ B
     sequenceC = sequence @ C
-
-    sequenceChunked_A = jnp.reshape(sequenceA, (heads, seq_len // chunk_size, chunk_size, head_dim))
-    sequenceChunked_B = jnp.reshape(sequenceB, (heads, seq_len // chunk_size, chunk_size, head_dim))
-    sequenceChunked_C = jnp.reshape(sequenceC, (heads, seq_len // chunk_size, chunk_size, head_dim))
 
     @jax.vmap
     def parallelize_over_heads(headChunked_A, headChunked_B, headChunked_C, W0, b0, head_scale, head_bias):
         return launch_kernel(headChunked_A, headChunked_B, headChunked_C, W0, b0, head_scale, head_bias)
     
-    sequenceCW = parallelize_over_heads(sequenceChunked_A, sequenceChunked_B, sequenceChunked_C, W0, b0, ln_scale, ln_bias)
+    sequenceCW = parallelize_over_heads(sequenceA, sequenceB, sequenceC, W0, b0, ln_scale, ln_bias)
     output = jnp.reshape(sequenceCW, (heads, seq_len, head_dim)) @ O
     return output
 
-dual(sequence, A, B, C, O, W0)
-
+kernel(sequence, A, B, C, O, W0, b0, ln_scale, ln_bias)
